@@ -8,10 +8,11 @@ setup(
     version="0.1",
     description="A simple wrapper to query Redash and return a Pandas DataFrame",
     author="Alex Ishida",
-    packages=find_packages(),
+    license="Apache License 2.0",
+    license_files=["license.txt"],
+    packages=['src'],
     install_requires=[
-        str(r)
-        for r in pkg_resources.parse_requirements(
+        str(r) for r in pkg_resources.parse_requirements(
             open(os.path.join(os.path.dirname(__file__), "requirements.txt"))
         )
     ],
