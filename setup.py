@@ -4,9 +4,9 @@ import pkg_resources
 from setuptools import setup, find_packages
 
 setup(
-    name="redash_pandas",
-    py_modules=["redash_pandas"],
-    version="1.0",
+    name="redash-pandas",
+    py_modules=["src"],
+    version="0.1",
     description="A simple wrapper to query Redash and return a Pandas DataFrame",
     author="Alex Ishida",
     packages=find_packages(),
