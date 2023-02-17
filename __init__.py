@@ -1,1 +1,1 @@
-from .src.redash import Redash
+from .src import Redash
