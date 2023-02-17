@@ -1,1 +1,1 @@
-from .src import Redash
+from .redash_pandas import Redash
