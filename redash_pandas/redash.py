@@ -13,7 +13,7 @@ class Redash:
     def __init__(
         self,
         credentials: str = '',
-        api_key: str = '',
+        apikey: str = '',
         endpoint: str = '',
     ) -> None:
         """
@@ -28,7 +28,7 @@ class Redash:
             }
             ```
 
-            - api_key: your Redash API key.
+            - apikey: your Redash API key.
             - endpoint: the endpoint of the Redash instance. For example: https://redash.your_url.com
         """
         if credentials:
@@ -36,8 +36,8 @@ class Redash:
             self.endpoint = secrets.get('endpoint', '')
             self.apikey = secrets.get('apikey', '')
 
-        if api_key:
-            self.apikey = api_key
+        if apikey:
+            self.apikey = apikey
 
         if endpoint:
             self.endpoint = endpoint
