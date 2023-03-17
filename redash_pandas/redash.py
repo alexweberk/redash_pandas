@@ -67,45 +67,56 @@ class Redash:
             'max_age': max_age  # how long to use cached data
         }
 
-        self.res = requests.post(
-            self.req, headers={'content-type': 'application/json'}, json=post_data)
+        try:
+            self.res = requests.post(
+                self.req, headers={'content-type': 'application/json'}, json=post_data)
 
-        # Wait for the query job to finish.
-        # Skip and do nothing if the response does not contain 'job'
-        # This happens when the query had already been cached.
-        result = self.res.json()
+            # Wait for the query job to finish.
+            # Skip and do nothing if the response does not contain 'job'
+            # This happens when the query had already been cached.
+            result = self.res.json()
+        except Exception as e:
+            print(f"Initial query request failed with status {self.res.status_code}\n\nResponse:\n{self.res.content}")
+            return
 
-        if 'job' in result.keys():
-            job = result['job']
-            while job['status'] not in (3, 4):
-                self.res = requests.get(
-                    f'{self.endpoint}/api/jobs/{job["id"]}?api_key={self.apikey}')
-                job = self.res.json()['job']
-                time.sleep(1)
+        try:
+            if 'job' in result.keys():
+                job = result['job']
+                while job['status'] not in (3, 4):
+                    self.res = requests.get(
+                        f'{self.endpoint}/api/jobs/{job["id"]}?api_key={self.apikey}')
+                    job = self.res.json()['job']
+                    print(".", end='')
+                    time.sleep(1)
 
-            if 'query_result_id' in job.keys():
-                query_result_id = job['query_result_id']
-                self.res = requests.get(
-                    f'{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}')
-            elif 'error' in job.keys():
-                raise Exception(f"{job['error']}")
+                if 'query_result_id' in job.keys():
+                    query_result_id = job['query_result_id']
+                    self.res = requests.get(
+                        f'{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}')
+                    result = self.res.json()
+                elif 'error' in job.keys():
+                    raise Exception(f"{job['error']}")
+        except Exception as e:
+            raise Exception(f"Failed to obtain results of the query job. {e}")
 
-        result = self.res.json()
-
-        if not 'query_result' in result.keys():
+        if 'query_result' not in result.keys():
             warnings.warn(
                 f"`query_result` not found in `result` when running {query_id}. {result.items()}")
             return pd.DataFrame()
 
-        # Convert response to a Pandas DataFrame
-        data = result['query_result']['data']
-        columns = [column['name'] for column in data['columns']]
-        print(
-            f"Successuflly fetched {len(data['rows'])} rows from query_id = {query_id}."
-        )
-        df = pd.DataFrame(data['rows'], columns=columns)
+        try:
+            # Convert response to a Pandas DataFrame
+            data = result['query_result']['data']
+            columns = [column['name'] for column in data['columns']]
+            print(
+                f"Successuflly fetched {len(data['rows'])} rows from query_id = {query_id}."
+            )
+            df = pd.DataFrame(data['rows'], columns=columns)
+            return df
 
-        return df
+        except Exception as e:
+            print(f"Conversion of result to Pandas Dataframe failed. {e}")
+
 
     def safe_query(
         self,

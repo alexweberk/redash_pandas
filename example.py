@@ -1,5 +1,6 @@
 from redash import Redash
 
+# creds_fileを使う場合
 creds_file = "somefolder/path_to_creds_file"
 redash = Redash(creds_file)
 
