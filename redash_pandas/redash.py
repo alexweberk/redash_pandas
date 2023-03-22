@@ -43,7 +43,7 @@ class Redash:
             self.endpoint = endpoint
 
         if not self.apikey or not self.endpoint:
-            raise Exception("You are missing the Redash API key or the Redash endpoint. Supply either `credentials` file path or the `api_key` and `endpoint` as a string")
+            raise Exception("You are missing the Redash API key or the Redash endpoint. Supply either `credentials` file path or the `apikey` and `endpoint` as a string")
 
         self.req: Optional[str] = None
         self.res: Optional[Response] = None

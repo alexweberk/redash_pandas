@@ -5,7 +5,7 @@ from setuptools import setup
 
 setup(
     name="redash-pandas",
-    version="0.1",
+    version="0.2",
     description="A simple wrapper to query Redash and return a Pandas DataFrame",
     author="Alex Ishida",
     license="Apache License 2.0",

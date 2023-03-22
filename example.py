@@ -4,6 +4,9 @@ from redash import Redash
 creds_file = "somefolder/path_to_creds_file"
 redash = Redash(creds_file)
 
+# endpoint, apikeyを使う場合
+redash = Redash(apikey="<<YOUR_API_KEY>>", endpoint="https://<<YOUR_ENDPOINT>>")
+
 # クエリを実行する
 df = redash.query(2600)
 
