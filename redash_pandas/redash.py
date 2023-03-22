@@ -76,7 +76,7 @@ class Redash:
             # This happens when the query had already been cached.
             result = self.res.json()
         except Exception as e:
-            print(f"Initial query request failed with status {self.res.status_code}\n\nResponse:\n{self.res.content}")
+            print(f"Initial query request failed with status {self.res.status_code} when running query_id={query_id}\n\nResponse:\n{self.res.content}")
             return
 
         try:
@@ -97,7 +97,7 @@ class Redash:
                 elif 'error' in job.keys():
                     raise Exception(f"{job['error']}")
         except Exception as e:
-            raise Exception(f"Failed to obtain results of the query job. {e}")
+            raise Exception(f"Failed to obtain results of the query job when running query_id={query_id}. {e}")
 
         if 'query_result' not in result.keys():
             warnings.warn(
