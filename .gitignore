@@ -1,2 +1,12 @@
-**/__pycache__/**
-tests
+.vscode/
+
+.venv/
+
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+build/
+redash_pandas.egg-info/
+
+tests/
