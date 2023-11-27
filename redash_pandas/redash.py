@@ -4,6 +4,18 @@ import time
 import requests
 from requests import Response
 from typing import Optional
+from enum import IntEnum
+
+
+class JobStatus(IntEnum):
+    """
+    see this: https://redash.io/help/user-guide/integrations-and-api/api
+    """
+    PENDING = 1
+    STARTED = 2
+    SUCCESS = 3
+    FAILURE = 4
+    CANCELLED = 5
 
 
 class Redash:
@@ -48,11 +60,6 @@ class Redash:
                 Supply either `credentials` file path or the `apikey` and `endpoint` as a string.\
                 """
             )
-        try:
-            requests.get(self.endpoint + "/" + apikey)
-        except Exception as e:
-            print(e)
-            return
 
         self.req: Optional[str] = None
         self.res: Optional[Response] = None
@@ -109,48 +116,43 @@ class Redash:
 
         job = result["job"]
         job_status = job["status"]
-        """
-        1 == PENDING (waiting to be executed)
-        2 == STARTED (executing)
-        3 == SUCCESS
-        4 == FAILURE
-        5 == CANCELLED
-        """
-        if job_status == 5:
+
+        if job_status == JobStatus.CANCELLED:
             err_msg = job["error"]
-            print(job_status)
             print(f"{err_msg}\nCurrently, parameters are {params}")
             return
-        if job_status == 4:
+
+        if job_status == JobStatus.FAILURE:
             err_msg = job["error"]
-            print(job_status)
             print(f"{err_msg}\nMaybe, query timed out. \n\t{self.req}")
             return
-        while job_status not in [3, 4, 5]:
+
+        while job_status in (JobStatus.PENDING, JobStatus.STARTED):
             uri = f'{self.endpoint}/api/jobs/{job["id"]}?api_key={self.apikey}'
             self.res = requests.get(uri)
             job = self.res.json()["job"]
             job_status = job["status"]
-            if job_status == 4:
-                err_msg = job["error"]
-                err_cxt = ""
-                if "signal 9" in err_msg:
-                    err_cxt = "\nThis may indicate that the query runner ran out of memory"
-                else:
-                    err_cxt = "\nPerhaps the query syntax is incorrect. Please correct it in `redash` and run it again."
-                print(err_cxt)
-                print(f"\n\t{self.endpoint}/queries/{query_id}\n")
-                print(err_msg)
-                return
-            if job_status == 5:
-                err_msg = job["error"]
-                print("\nPerhaps the query runtime error occur.")
-                print(f"\n\t{self.endpoint}/queries/{query_id}\n")
-                print(err_msg)
-                return
             print(".", end="", flush=True)
             time.sleep(1)
-        print()
+
+        if job_status == JobStatus.FAILURE:
+            err_msg = job["error"]
+            url = f"{self.endpoint}/queries/{query_id}"
+            err_cxt = ""
+            if "signal 9" in err_msg:
+                err_cxt = "\nThis may indicate that the query runner ran out of memory"
+            else:
+                err_cxt = "\nPerhaps the query syntax is incorrect. Please correct it in `redash` and run it again."
+            print(err_msg)
+            print(err_cxt)
+            print(url)
+            return
+
+        if job_status == JobStatus.CANCELLED:
+            err_msg = job["error"]
+            err_cxt = "Perhaps the query runtime error occur."
+            print(err_msg)
+            return
 
         if "query_result_id" in job.keys():
             query_result_id = job["query_result_id"]
@@ -161,15 +163,11 @@ class Redash:
                 print("A server error occurred. Please retry.")
                 return
             result = self.res.json()
-        elif "query_result" not in result.keys():
-            print(f"`query_result` not found in `result` when running {query_id}. {result.items()}")
-            return
         elif "error" in job.keys():
-            print(job, result)
             print(f"{job['error']}")
             return
         else:
-            print("Unable to query")
+            print(f"`query_result` not found in `result` when running {query_id}. {result}")
             return
 
         try:
@@ -205,7 +203,7 @@ class Redash:
 
         final_df = pd.DataFrame()
         batch_ix = 0
-        while True:
+        while batch_ix < max_iter:
             start_ix = batch_ix * limit
             params.update({"offset_rows": start_ix, "limit_rows": limit})
             partial_df = self.query(query_id, params=params, max_age=max_age)
@@ -214,10 +212,6 @@ class Redash:
 
             # If the number of rows fetched is less than the `limit` it means we got all the data.
             if len(partial_df) < limit:
-                break
-
-            # Stop if the number of iterations goes above the max_iter limit.
-            if batch_ix >= max_iter:
                 break
 
         return final_df
