@@ -1,16 +1,17 @@
-import pandas as pd
+from typing import Optional
 import json
 import time
+from enum import IntEnum
+import pandas as pd
 import requests
 from requests import Response
-from typing import Optional
-from enum import IntEnum
 
 
 class JobStatus(IntEnum):
     """
     see this: https://redash.io/help/user-guide/integrations-and-api/api
     """
+
     PENDING = 1
     STARTED = 2
     SUCCESS = 3
@@ -43,7 +44,7 @@ class Redash:
             - endpoint: the endpoint of the Redash instance. For example: https://redash.your_url.com
         """
         if credentials:
-            secrets: dict = json.load(open(credentials))
+            secrets: dict = json.load(open(credentials, "r", encoding="utf-8"))
             self.endpoint: Optional[str] = secrets.get("endpoint", None)
             self.apikey: Optional[str] = secrets.get("apikey", None)
 
@@ -54,12 +55,11 @@ class Redash:
             self.endpoint = endpoint
 
         if not self.apikey or not self.endpoint:
-            raise Exception(
-                """\
-                You are missing the Redash API key or the Redash endpoint.
-                Supply either `credentials` file path or the `apikey` and `endpoint` as a string.\
-                """
+            err_msg = (
+                "You are missing the Redash API key or the Redash endpoint.\n"
+                "Supply either `credentials` file path or the `apikey` and `endpoint` as a string."
             )
+            raise Exception(err_msg)
 
         self.req: Optional[str] = None
         self.res: Optional[Response] = None
@@ -67,10 +67,12 @@ class Redash:
     def query(
         self,
         query_id: int | str,
-        params: dict = {},
+        params: Optional[dict] = None,
         max_age: int = 0,
+        timeout: int = 60,
     ) -> pd.DataFrame:
         """Queries Redash at `query_id`"""
+        params = params or {}
         # Obtain request URI
         self.req = self._build_query_uri(query_id, params)
 
@@ -85,6 +87,7 @@ class Redash:
                 self.req,
                 headers={"content-type": "application/json"},
                 json=post_data,
+                timeout=timeout,
             )
             # Wait for the query job to finish.
             # Skip and do nothing if the response does not contain 'job'
@@ -108,28 +111,28 @@ class Redash:
             raise e
 
         if "message" in result.keys():
-            print(
-                f"`endpoint` or `apikey` are not correct.\nendpoint: {self.endpoint} \napikey:{self.apikey}"
-            )
-            print(result["message"])
-            return
+            err_msg = f"`endpoint` or `apikey` are not correct.\nendpoint: {self.endpoint} \napikey: {self.apikey}\nmessage: {result['message']}"
+            print(err_msg)
+            raise Exception(err_msg)
 
         job = result["job"]
         job_status = job["status"]
 
         if job_status == JobStatus.CANCELLED:
-            err_msg = job["error"]
-            print(f"{err_msg}\nCurrently, parameters are {params}")
-            return
+            err_msg = str(job["error"]) + f"\nCurrently, parameters are {params}"
+            print(err_msg)
+            raise Exception(err_msg)
 
         if job_status == JobStatus.FAILURE:
-            err_msg = job["error"]
-            print(f"{err_msg}\nMaybe, query timed out. \n\t{self.req}")
-            return
+            err_msg = (
+                str(job["error"]) + f"\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
+            )
+            print(err_msg)
+            raise Exception(err_msg)
 
         while job_status in (JobStatus.PENDING, JobStatus.STARTED):
             uri = f'{self.endpoint}/api/jobs/{job["id"]}?api_key={self.apikey}'
-            self.res = requests.get(uri)
+            self.res = requests.get(uri, timeout=timeout)
             job = self.res.json()["job"]
             job_status = job["status"]
             print(".", end="", flush=True)
@@ -146,18 +149,18 @@ class Redash:
             print(err_msg)
             print(err_cxt)
             print(url)
-            return
+            raise Exception(f"{err_msg} {err_cxt} {url}")
 
         if job_status == JobStatus.CANCELLED:
             err_msg = job["error"]
             err_cxt = "Perhaps the query runtime error occur."
             print(err_msg)
-            return
+            raise Exception(f"{err_msg} {err_cxt}")
 
         if "query_result_id" in job.keys():
             query_result_id = job["query_result_id"]
             self.res = requests.get(
-                f"{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}"
+                f"{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}", timeout=timeout
             )
             if self.res.status_code == 502:
                 print("A server error occurred. Please retry.")
@@ -165,10 +168,10 @@ class Redash:
             result = self.res.json()
         elif "error" in job.keys():
             print(f"{job['error']}")
-            return
+            raise Exception(f"{job['error']}")
         else:
             print(f"`query_result` not found in `result` when running {query_id}. {result}")
-            return
+            raise Exception(f"`query_result` not found in `result` when running {query_id}. {result}")
 
         try:
             # Convert response to a Pandas DataFrame
@@ -178,15 +181,18 @@ class Redash:
             df = pd.DataFrame(data["rows"], columns=columns)
             return df
         except Exception as e:
-            print(f"Conversion of result to Pandas DataFrame failed. {e}")
+            error_message = f"Conversion of result to Pandas DataFrame failed. {e}"
+            print(error_message)
+            raise Exception(error_message)
 
     def safe_query(
         self,
         query_id: int,
-        params: dict = {},
+        params: Optional[dict] = None,
         max_age: int = 0,
         limit: int = 10000,
         max_iter: int = 100,
+        timeout: int = 60,
     ) -> pd.DataFrame:
         """
         Queries Redash certain rows at a time.
@@ -200,13 +206,13 @@ class Redash:
         Output:
             - dataframe: A dataframe of the fetched data.
         """
-
+        params = params or {}
         final_df = pd.DataFrame()
         batch_ix = 0
         while batch_ix < max_iter:
             start_ix = batch_ix * limit
             params.update({"offset_rows": start_ix, "limit_rows": limit})
-            partial_df = self.query(query_id, params=params, max_age=max_age)
+            partial_df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
             final_df = pd.concat([final_df, partial_df], axis=0)
             batch_ix += 1
 
@@ -216,8 +222,9 @@ class Redash:
 
         return final_df
 
-    def _build_query_uri(self, query_id: int | str, params: dict = {}) -> str:
+    def _build_query_uri(self, query_id: int | str, params: Optional[dict] = None) -> str:
         """Builds query request URI."""
+        params = params or {}
         uri = f"{self.endpoint}/api/queries/{query_id}/results?api_key={self.apikey}"
 
         for key, value in params.items():
