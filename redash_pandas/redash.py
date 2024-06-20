@@ -1,7 +1,8 @@
-from typing import Optional
 import json
 import time
 from enum import IntEnum
+from typing import Literal, Optional
+
 import pandas as pd
 import requests
 from requests import Response
@@ -125,7 +126,8 @@ class Redash:
 
         if job_status == JobStatus.FAILURE:
             err_msg = (
-                str(job["error"]) + f"\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
+                str(job["error"])
+                + f"\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
             )
             print(err_msg)
             raise Exception(err_msg)
@@ -160,7 +162,8 @@ class Redash:
         if "query_result_id" in job.keys():
             query_result_id = job["query_result_id"]
             self.res = requests.get(
-                f"{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}", timeout=timeout
+                f"{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}",
+                timeout=timeout,
             )
             if self.res.status_code == 502:
                 print("A server error occurred. Please retry.")
@@ -171,7 +174,9 @@ class Redash:
             raise Exception(f"{job['error']}")
         else:
             print(f"`query_result` not found in `result` when running {query_id}. {result}")
-            raise Exception(f"`query_result` not found in `result` when running {query_id}. {result}")
+            raise Exception(
+                f"`query_result` not found in `result` when running {query_id}. {result}"
+            )
 
         try:
             # Convert response to a Pandas DataFrame
@@ -231,3 +236,72 @@ class Redash:
             uri += f"&p_{key}={value}"
 
         return uri
+
+    def period_limited_query(
+        self,
+        query_id: int,
+        start_date: str,  # like '2024-01-01'
+        end_date: str,  # like '2024-01-31'
+        interval: Literal["day", "week", "month", "year"],
+        interval_multiple: int = 1,
+        max_age: int = 0,
+        timeout: int = 60,
+    ) -> pd.DataFrame:
+        """Queries Redash at `query_id`, by only querying data within between
+        start_date and end_date, with a frequency of `interval` x `interval_multiple`.
+        For example, `interval = 'month'` and `interval_multiple = 3` will query data for every 3 months.
+        This can help make the query run much faster.
+
+        Query statement at query_id must have parameters
+        `start_date` and `end_date` defined.
+
+        Example:
+        ```
+        select
+            date_trunc('month', bookings.created_at + interval '9 hours') b_mo
+            , count(distinct bookings.id) b_cnt
+            , sum(bookings.price) b_price
+        from bookings
+        where true
+            and bookings.status = 1
+            and bookings.created_at + interval '9 hours' between '{{start_date}}'::date
+                and '{{end_date}}'::date - interval '1 second'
+        group by 1
+        order by 1
+        ```
+
+        %run redash_pandas/redash.py
+        redash = Redash(**json.loads(open("<<credentials_file>>").read()))
+        df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-06-20',
+            interval='month', interval_multiple = 3)
+        """
+        assert (
+            start_date and end_date and interval
+        ), "`start_date`, `end_date` and `interval` must be defined."
+        assert interval in [
+            "day",
+            "week",
+            "month",
+            "year",
+        ], "`interval` must be one of 'day', 'week', 'month', 'year'."
+        assert interval_multiple > 0 and isinstance(
+            interval_multiple, int
+        ), "`interval_multiple` must be an integer greater than 0."
+
+        intervals = {"day": "D", "week": "W", "month": "MS", "year": "YS"}
+        interval = intervals[interval]
+        final_df = pd.DataFrame()
+
+        start_dates = pd.date_range(start=start_date, end=end_date, freq=interval)
+        # create offset of interval_multiple
+        start_dates = start_dates[::interval_multiple]
+        end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
+
+        for start_date_, end_date_ in zip(start_dates, end_dates):
+            params = {
+                "start_date": start_date_.strftime("%Y-%m-%d"),
+                "end_date": end_date_.strftime("%Y-%m-%d"),
+            }
+            df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
+            final_df = pd.concat([final_df, df], axis=0)
+        return final_df
