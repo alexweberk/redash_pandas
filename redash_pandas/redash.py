@@ -243,6 +243,7 @@ class Redash:
         start_date: str,  # like '2024-01-01'
         end_date: str,  # like '2024-01-31'
         interval: Literal["day", "week", "month", "year"],
+        params: Optional[dict] = None,
         interval_multiple: int = 1,
         max_age: int = 0,
         timeout: int = 60,
@@ -298,10 +299,13 @@ class Redash:
         end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
 
         for start_date_, end_date_ in zip(start_dates, end_dates):
-            params = {
-                "start_date": start_date_.strftime("%Y-%m-%d"),
-                "end_date": end_date_.strftime("%Y-%m-%d"),
-            }
+            params = params or {}
+            params.update(
+                {
+                    "start_date": start_date_.strftime("%Y-%m-%d"),
+                    "end_date": end_date_.strftime("%Y-%m-%d"),
+                }
+            )
             df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
             final_df = pd.concat([final_df, df], axis=0)
         return final_df
