@@ -45,25 +45,23 @@ class Redash:
             - endpoint: the endpoint of the Redash instance. For example: https://redash.your_url.com
         """
         if credentials:
-            secrets: dict = json.load(open(credentials, "r", encoding="utf-8"))
-            self.endpoint: Optional[str] = secrets.get("endpoint", None)
-            self.apikey: Optional[str] = secrets.get("apikey", None)
-
-        if apikey:
+            with open(credentials, "r", encoding="utf-8") as f:
+                secrets: dict = json.load(f)
+            self.endpoint: Optional[str] = secrets.get("endpoint")
+            self.apikey: Optional[str] = secrets.get("apikey")
+        else:
             self.apikey = apikey
-
-        if endpoint:
             self.endpoint = endpoint
 
         if not self.apikey or not self.endpoint:
-            err_msg = (
+            raise ValueError(
                 "You are missing the Redash API key or the Redash endpoint.\n"
                 "Supply either `credentials` file path or the `apikey` and `endpoint` as a string."
             )
-            raise Exception(err_msg)
 
         self.req: Optional[str] = None
         self.res: Optional[Response] = None
+        self.session = requests.Session()  # Create a session for reuse
 
     def query(
         self,
@@ -84,7 +82,7 @@ class Redash:
         }
 
         try:
-            self.res = requests.post(
+            self.res = self.session.post(
                 self.req,
                 headers={"content-type": "application/json"},
                 json=post_data,
@@ -94,47 +92,41 @@ class Redash:
             # Skip and do nothing if the response does not contain 'job'
             # This happens when the query had already been cached.
             result = self.res.json()
-        except Exception as e:
+        except requests.RequestException as e:
             if self.res is None:
                 print(
-                    f"""\
-                    Maybe `endpoint` is not correct.
-                    Please check if it is accessible: `{self.endpoint}`\n\nResponse:\n{e}\
-                    """
+                    f"Maybe `endpoint` is not correct. "
+                    f"Please check if it is accessible: `{self.endpoint}`\n\nResponse:\n{e}"
                 )
             else:
                 print(
-                    f"""\
-                    Initial query request failed with status {self.res.status_code} when running query_id={query_id}
-                    Response:\n{self.res.content}
-                    """
+                    f"Initial query request failed with status {self.res.status_code} "
+                    f"when running query_id={query_id}\nResponse:\n{self.res.content}"
                 )
-            raise e
+            raise
 
-        if "message" in result.keys():
-            err_msg = f"`endpoint` or `apikey` are not correct.\nendpoint: {self.endpoint} \napikey: {self.apikey}\nmessage: {result['message']}"
-            print(err_msg)
-            raise Exception(err_msg)
+        if "message" in result:
+            err_msg = (
+                f"`endpoint` or `apikey` are not correct.\n"
+                f"endpoint: {self.endpoint} \napikey: {self.apikey}\n"
+                f"message: {result['message']}"
+            )
+            raise ValueError(err_msg)
 
         job = result["job"]
         job_status = job["status"]
 
         if job_status == JobStatus.CANCELLED:
-            err_msg = str(job["error"]) + f"\nCurrently, parameters are {params}"
-            print(err_msg)
-            raise Exception(err_msg)
+            raise ValueError(f"{job['error']}\nCurrently, parameters are {params}")
 
         if job_status == JobStatus.FAILURE:
-            err_msg = (
-                str(job["error"])
-                + f"\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
+            raise ValueError(
+                f"{job['error']}\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
             )
-            print(err_msg)
-            raise Exception(err_msg)
 
         while job_status in (JobStatus.PENDING, JobStatus.STARTED):
             uri = f'{self.endpoint}/api/jobs/{job["id"]}?api_key={self.apikey}'
-            self.res = requests.get(uri, timeout=timeout)
+            self.res = self.session.get(uri, timeout=timeout)
             job = self.res.json()["job"]
             job_status = job["status"]
             print(".", end="", flush=True)
@@ -143,52 +135,39 @@ class Redash:
         if job_status == JobStatus.FAILURE:
             err_msg = job["error"]
             url = f"{self.endpoint}/queries/{query_id}"
-            err_cxt = ""
-            if "signal 9" in err_msg:
-                err_cxt = "\nThis may indicate that the query runner ran out of memory"
-            else:
-                err_cxt = "\nPerhaps the query syntax is incorrect. Please correct it in `redash` and run it again."
-            print(err_msg)
-            print(err_cxt)
-            print(url)
-            raise Exception(f"{err_msg} {err_cxt} {url}")
+            err_cxt = (
+                "\nThis may indicate that the query runner ran out of memory"
+                if "signal 9" in err_msg
+                else "\nPerhaps the query syntax is incorrect. Please correct it in `redash` and run it again."
+            )
+            raise ValueError(f"{err_msg} {err_cxt} {url}")
 
         if job_status == JobStatus.CANCELLED:
-            err_msg = job["error"]
-            err_cxt = "Perhaps the query runtime error occur."
-            print(err_msg)
-            raise Exception(f"{err_msg} {err_cxt}")
+            raise ValueError(f"{job['error']} Perhaps the query runtime error occurred.")
 
-        if "query_result_id" in job.keys():
+        if "query_result_id" in job:
             query_result_id = job["query_result_id"]
-            self.res = requests.get(
+            self.res = self.session.get(
                 f"{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}",
                 timeout=timeout,
             )
             if self.res.status_code == 502:
                 print("A server error occurred. Please retry.")
-                return
+                return pd.DataFrame()  # Return empty DataFrame instead of None
             result = self.res.json()
-        elif "error" in job.keys():
-            print(f"{job['error']}")
-            raise Exception(f"{job['error']}")
+        elif "error" in job:
+            raise ValueError(f"{job['error']}")
         else:
-            print(f"`query_result` not found in `result` when running {query_id}. {result}")
-            raise Exception(
-                f"`query_result` not found in `result` when running {query_id}. {result}"
-            )
+            raise ValueError(f"`query_result` not found in `result` when running {query_id}. {result}")
 
         try:
             # Convert response to a Pandas DataFrame
             data = result["query_result"]["data"]
             columns = [column["name"] for column in data["columns"]]
-            print(f"Successuflly fetched {len(data['rows'])} rows from query_id = {query_id}.")
-            df = pd.DataFrame(data["rows"], columns=columns)
-            return df
+            print(f"Successfully fetched {len(data['rows'])} rows from query_id = {query_id}.")
+            return pd.DataFrame(data["rows"], columns=columns)
         except Exception as e:
-            error_message = f"Conversion of result to Pandas DataFrame failed. {e}"
-            print(error_message)
-            raise Exception(error_message)
+            raise ValueError(f"Conversion of result to Pandas DataFrame failed. {e}")
 
     def safe_query(
         self,
@@ -207,35 +186,30 @@ class Redash:
             - max_age: 0 means that queries are refreshed on every run.
             - params: Any parameters as a dictionary.
             - limit: Number of rows to fetch at a time.
-            - max_iter: Max iterations. A safe guard to avoid an infinte loop.
+            - max_iter: Max iterations. A safe guard to avoid an infinite loop.
         Output:
             - dataframe: A dataframe of the fetched data.
         """
         params = params or {}
-        final_df = pd.DataFrame()
-        batch_ix = 0
-        while batch_ix < max_iter:
+
+        dfs = []
+        for batch_ix in range(max_iter):
             start_ix = batch_ix * limit
             params.update({"offset_rows": start_ix, "limit_rows": limit})
             partial_df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
-            final_df = pd.concat([final_df, partial_df], axis=0)
-            batch_ix += 1
-
+            if partial_df.empty:
+                break
+            dfs.append(partial_df)
             # If the number of rows fetched is less than the `limit` it means we got all the data.
             if len(partial_df) < limit:
                 break
 
+        if not dfs:
+            return pd.DataFrame()
+
+        final_df = pd.concat(dfs, axis=0, ignore_index=True)
+
         return final_df
-
-    def _build_query_uri(self, query_id: int | str, params: Optional[dict] = None) -> str:
-        """Builds query request URI."""
-        params = params or {}
-        uri = f"{self.endpoint}/api/queries/{query_id}/results?api_key={self.apikey}"
-
-        for key, value in params.items():
-            uri += f"&p_{key}={value}"
-
-        return uri
 
     def period_limited_query(
         self,
@@ -276,9 +250,7 @@ class Redash:
         df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-06-20',
             interval='month', interval_multiple = 3)
         """
-        assert (
-            start_date and end_date and interval
-        ), "`start_date`, `end_date` and `interval` must be defined."
+        assert start_date and end_date and interval, "`start_date`, `end_date` and `interval` must be defined."
         assert interval in [
             "day",
             "week",
@@ -291,15 +263,15 @@ class Redash:
 
         intervals = {"day": "D", "week": "W", "month": "MS", "year": "YS"}
         interval = intervals[interval]
-        final_df = pd.DataFrame()
 
         start_dates = pd.date_range(start=start_date, end=end_date, freq=interval)
         # create offset of interval_multiple
         start_dates = start_dates[::interval_multiple]
         end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
 
+        dfs = []
+        params = params or {}
         for start_date_, end_date_ in zip(start_dates, end_dates):
-            params = params or {}
             params.update(
                 {
                     "start_date": start_date_.strftime("%Y-%m-%d"),
@@ -307,5 +279,21 @@ class Redash:
                 }
             )
             df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
-            final_df = pd.concat([final_df, df], axis=0)
+            if not df.empty:
+                dfs.append(df)
+
+        if not dfs:
+            return pd.DataFrame()
+
+        final_df = pd.concat(dfs, axis=0, ignore_index=True)
         return final_df
+
+    def _build_query_uri(self, query_id: int | str, params: Optional[dict] = None) -> str:
+        """Builds query request URI."""
+        params = params or {}
+        uri = f"{self.endpoint}/api/queries/{query_id}/results?api_key={self.apikey}"
+
+        for key, value in params.items():
+            uri += f"&p_{key}={value}"
+
+        return uri

@@ -40,10 +40,22 @@ redash = Redash(
 df = redash.query(42) # query IDを数字で入れると、そのクエリ結果がpandasのDataFrameとして返ってくる。
 ```
 
-### クエリの負荷が大きいあ場合
+### クエリの負荷が大きい場合
 
 ```
 # 行数が多い場合も、クエリ内に `limit_rows` と `offset_rows` というパラメータをつけてあげれば、指定した行数毎に
 # 全てのデータを取得してくれる。
 df = redash.safe_query(2674, params={'user_name':'John Doe', 'email':'johndoe@email.com'}, limit=100_000)
+```
+
+### クエリ取得を期間で絞れる場合
+
+```
+# 2023-01-01から2024-06-20までのデータに関して、３ヶ月単位でデータを取得する
+df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-06-20',
+            interval='month', interval_multiple = 3)
+
+# 2023-01-01から2024-06-20までのデータに関して、４週間単位でデータを取得する
+df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-06-20',
+            interval='week', interval_multiple = 4)
 ```
