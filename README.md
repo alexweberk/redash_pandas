@@ -59,3 +59,19 @@ df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-0
 df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-06-20',
             interval='week', interval_multiple = 4)
 ```
+
+クエリ側では、下記のような書き方をする必要がある。
+
+```
+select
+    date_trunc('month', bookings.created_at + interval '9 hours') b_mo
+    , count(distinct bookings.id) b_cnt
+    , sum(bookings.price) b_price
+from bookings
+where true
+    and bookings.status = 1
+    and bookings.created_at + interval '9 hours' between '{{start_date}}'::date 
+        and '{{end_date}}'::date - interval '1 second'
+group by 1
+order by 1
+```
