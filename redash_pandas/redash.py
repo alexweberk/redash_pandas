@@ -268,14 +268,14 @@ class Redash:
 
         start_dates = pd.date_range(start=start_date, end=end_date, freq=interval)
         # create offset of interval_multiple
-        std_start_date = pd.to_datetime(start_date)
+        user_input_start_date = pd.to_datetime(start_date)
 
         if start_dates.empty:
             print('Too short period!')
-            start_dates = [std_start_date] 
+            start_dates = [user_input_start_date] 
             end_dates = [pd.to_datetime(end_date)]
-        elif start_dates[0] != std_start_date:
-            start_dates = [std_start_date] + start_dates[::interval_multiple].tolist()
+        elif start_dates[0] != user_input_start_date:
+            start_dates = [user_input_start_date] + start_dates[::interval_multiple].tolist()
             end_dates = start_dates[1:] + [pd.to_datetime(end_date)]
         else:
             start_dates = start_dates[::interval_multiple]
