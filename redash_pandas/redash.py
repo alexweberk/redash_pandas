@@ -271,7 +271,7 @@ class Redash:
         user_input_start_date = pd.to_datetime(start_date)
 
         if start_dates.empty:
-            print('Too short period!')
+            print("The entered time range is too short, fetch the data as much as possible for you.")
             start_dates = [user_input_start_date] 
             end_dates = [pd.to_datetime(end_date)]
         elif start_dates[0] != user_input_start_date:
