@@ -62,7 +62,8 @@ class Redash:
         self.req: Optional[str] = None
         self.res: Optional[Response] = None
         self.session = requests.Session()  # Create a session for reuse
-
+    
+    
     def query(
         self,
         query_id: int | str,
@@ -216,7 +217,7 @@ class Redash:
         query_id: int,
         start_date: str,  # like '2024-01-01'
         end_date: str,  # like '2024-01-31'
-        interval: Literal["day", "week", "month", "year"],
+        interval: Literal["day", "week", "month", "quarter", "year"],
         params: Optional[dict] = None,
         interval_multiple: int = 1,
         max_age: int = 0,
@@ -255,20 +256,31 @@ class Redash:
             "day",
             "week",
             "month",
+            "quarter",
             "year",
-        ], "`interval` must be one of 'day', 'week', 'month', 'year'."
+        ], "`interval` must be one of 'day', 'week', 'month', 'quarter', 'year'."
         assert interval_multiple > 0 and isinstance(
             interval_multiple, int
         ), "`interval_multiple` must be an integer greater than 0."
 
-        intervals = {"day": "D", "week": "W", "month": "MS", "year": "YS"}
+        intervals = {"day": "D", "week": "W", "month": "MS", "quarter": "QS", "year": "YS"}
         interval = intervals[interval]
 
         start_dates = pd.date_range(start=start_date, end=end_date, freq=interval)
         # create offset of interval_multiple
-        start_dates = start_dates[::interval_multiple]
-        end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
+        user_input_start_date = pd.to_datetime(start_date)
 
+        if start_dates.empty:
+            print("The entered time range is too short, fetch the data as much as possible for you.")
+            start_dates = [user_input_start_date] 
+            end_dates = [pd.to_datetime(end_date)]
+        elif start_dates[0] != user_input_start_date:
+            start_dates = [user_input_start_date] + start_dates[::interval_multiple].tolist()
+            end_dates = start_dates[1:] + [pd.to_datetime(end_date)]
+        else:
+            start_dates = start_dates[::interval_multiple]
+            end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
+        
         dfs = []
         params = params or {}
         for start_date_, end_date_ in zip(start_dates, end_dates):
