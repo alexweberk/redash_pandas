@@ -237,7 +237,7 @@ class Redash:
         query_id: int,
         start_date: str,  # like '2024-01-01'
         end_date: str,  # like '2024-01-31'
-        interval: Literal["day", "week", "month", "year"],
+        interval: Literal["day", "week", "month", "quarter", "year"],
         params: Optional[dict] = None,
         interval_multiple: int = 1,
         max_age: int = 0,
@@ -276,6 +276,7 @@ class Redash:
             "day",
             "week",
             "month",
+            "quarter",
             "year",
         ], "`interval` must be one of 'day', 'week', 'month', 'year'."
         assert interval_multiple > 0 and isinstance(interval_multiple, int), (
