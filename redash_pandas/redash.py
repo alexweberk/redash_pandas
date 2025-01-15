@@ -150,6 +150,7 @@ class Redash:
 
                 job = self.res.json()["job"]
                 job_status = job["status"]
+                print(".", end="", flush=True)
                 self.logger.debug("Job status check in progress...")  # Progress indicator
                 time.sleep(1)
             except httpx.TimeoutException:
