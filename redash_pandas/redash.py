@@ -7,9 +7,6 @@ from typing import Literal, Optional
 import httpx
 import pandas as pd
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 
 class JobStatus(IntEnum):
     """
@@ -32,6 +29,7 @@ class Redash:
         apikey: str = "",
         endpoint: str = "",
         default_timeout: int = 60,  # 60 seconds
+        logging_level: int = logging.INFO,
     ) -> None:
         """
         Input:
@@ -48,7 +46,19 @@ class Redash:
             - apikey: your Redash API key.
             - endpoint: the endpoint of the Redash instance. For example: https://redash.your_url.com
             - default_timeout: default timeout in seconds for all requests
+            - logging_level: logging level for this instance (default: logging.INFO)
         """
+        # Setup instance-specific logger
+        self.logger = logging.getLogger(f"{__name__}.Redash")
+        self.logger.setLevel(logging_level)
+
+        # Add handler if none exists
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+
         if credentials:
             with open(credentials, "r", encoding="utf-8") as f:
                 secrets: dict = json.load(f)
@@ -95,16 +105,16 @@ class Redash:
             )
             result = self.res.json()
         except httpx.TimeoutException:
-            logging.error(f"\nRequest timed out after {timeout} seconds for query_id={query_id}")
+            self.logger.error(f"\nRequest timed out after {timeout} seconds for query_id={query_id}")
             return pd.DataFrame()
         except httpx.RequestError as e:
             if self.res is None:
-                logging.error(
+                self.logger.error(
                     f"Maybe `endpoint` is not correct. "
                     f"Please check if it is accessible: `{self.endpoint}`\n\nResponse:\n{e}"
                 )
             else:
-                logging.error(
+                self.logger.error(
                     f"Initial query request failed with status {self.res.status_code} "
                     f"when running query_id={query_id}\nResponse:\n{self.res.text}"
                 )
@@ -135,18 +145,18 @@ class Redash:
                 self.res = self.client.get(uri, timeout=timeout)
 
                 if self.res.status_code == 502:
-                    logging.warning(f"Gateway error (502) occurred for job {job['id']}. Returning empty DataFrame.")
+                    self.logger.warning(f"Gateway error (502) occurred for job {job['id']}. Returning empty DataFrame.")
                     return pd.DataFrame()
 
                 job = self.res.json()["job"]
                 job_status = job["status"]
-                logging.debug("Job status check in progress...")  # Progress indicator
+                self.logger.debug("Job status check in progress...")  # Progress indicator
                 time.sleep(1)
             except httpx.TimeoutException:
-                logging.error(f"\nJob status check timed out after {timeout} seconds")
+                self.logger.error(f"\nJob status check timed out after {timeout} seconds")
                 return pd.DataFrame()
             except httpx.RequestError as e:
-                logging.error(f"\nError checking job status: {e}")
+                self.logger.error(f"\nError checking job status: {e}")
                 return pd.DataFrame()
 
         if job_status == JobStatus.FAILURE:
@@ -170,22 +180,22 @@ class Redash:
             )
 
             if self.res.status_code == 502:
-                logging.warning("Gateway error (502) occurred. Returning empty DataFrame.")
+                self.logger.warning("Gateway error (502) occurred. Returning empty DataFrame.")
                 return pd.DataFrame()
 
             result = self.res.json()
         except httpx.TimeoutException:
-            logging.error(f"\nRequest for query results timed out after {timeout} seconds")
+            self.logger.error(f"\nRequest for query results timed out after {timeout} seconds")
             return pd.DataFrame()
         except httpx.RequestError as e:
-            logging.error(f"Error fetching query results: {e}")
+            self.logger.error(f"Error fetching query results: {e}")
             return pd.DataFrame()
 
         try:
             # Convert response to a Pandas DataFrame
             data = result["query_result"]["data"]
             columns = [column["name"] for column in data["columns"]]
-            logging.info(f"Successfully fetched {len(data['rows'])} rows from query_id = {query_id}.")
+            self.logger.info(f"Successfully fetched {len(data['rows'])} rows from query_id = {query_id}.")
             return pd.DataFrame(data["rows"], columns=columns)
         except Exception as e:
             raise RuntimeError(f"Conversion of result to Pandas DataFrame failed. {e}")
