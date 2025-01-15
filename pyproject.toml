@@ -1,6 +1,43 @@
+[project]
+name = "redash-pandas"
+version = "0.1.1"
+description = "A simple wrapper class for easy querying of data from Redash."
+authors = [{ name = "Alex Ishida", email = "alex.weber.k@gmail.com" }]
+dependencies = ["pandas>=2.2.3", "httpx>=0.28.1"]
+readme = "README.md"
+requires-python = ">= 3.10"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "pandas-stubs>=2.2.3.241126",
+    "types-requests>=2.32.0.20241016",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ipython>=8.31.0",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["redash_pandas"]
+
 [tool.black]
 line-length = 100
 
 [tool.ruff]
 exclude = [".venv"]
 line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
