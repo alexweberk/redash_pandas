@@ -1,11 +1,14 @@
 import json
+import logging
 import time
 from enum import IntEnum
 from typing import Literal, Optional
 
+import httpx
 import pandas as pd
-import requests
-from requests import Response
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class JobStatus(IntEnum):
@@ -21,13 +24,14 @@ class JobStatus(IntEnum):
 
 
 class Redash:
-    "A simple wrapper class for easy querying of data from Redash."
+    "A simple wrapper class for easy querying of data from Redash using httpx."
 
     def __init__(
         self,
         credentials: str = "",
         apikey: str = "",
         endpoint: str = "",
+        default_timeout: int = 60,  # 60 seconds
     ) -> None:
         """
         Input:
@@ -43,6 +47,7 @@ class Redash:
 
             - apikey: your Redash API key.
             - endpoint: the endpoint of the Redash instance. For example: https://redash.your_url.com
+            - default_timeout: default timeout in seconds for all requests
         """
         if credentials:
             with open(credentials, "r", encoding="utf-8") as f:
@@ -60,48 +65,48 @@ class Redash:
             )
 
         self.req: Optional[str] = None
-        self.res: Optional[Response] = None
-        self.session = requests.Session()  # Create a session for reuse
+        self.res: Optional[httpx.Response] = None
+        self.client = httpx.Client(timeout=default_timeout)  # Replace requests.Session
+        self.default_timeout = default_timeout  # Store timeout for use in requests
 
     def query(
         self,
         query_id: int | str,
         params: Optional[dict] = None,
         max_age: int = 0,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
     ) -> pd.DataFrame:
         """Queries Redash at `query_id`"""
+        timeout = timeout or self.default_timeout
         params = params or {}
-        # Obtain request URI
         self.req = self._build_query_uri(query_id, params)
 
-        # Convert all post data to strings
         post_data: dict = {
             "parameters": {str(key): str(value) for key, value in params.items()},
             "max_age": max_age,  # how long to use cached data
         }
 
         try:
-            self.res = self.session.post(
+            self.res = self.client.post(
                 self.req,
                 headers={"content-type": "application/json"},
                 json=post_data,
                 timeout=timeout,
             )
-            # Wait for the query job to finish.
-            # Skip and do nothing if the response does not contain 'job'
-            # This happens when the query had already been cached.
             result = self.res.json()
-        except requests.RequestException as e:
+        except httpx.TimeoutException:
+            logging.error(f"\nRequest timed out after {timeout} seconds for query_id={query_id}")
+            return pd.DataFrame()
+        except httpx.RequestError as e:
             if self.res is None:
-                print(
+                logging.error(
                     f"Maybe `endpoint` is not correct. "
                     f"Please check if it is accessible: `{self.endpoint}`\n\nResponse:\n{e}"
                 )
             else:
-                print(
+                logging.error(
                     f"Initial query request failed with status {self.res.status_code} "
-                    f"when running query_id={query_id}\nResponse:\n{self.res.content}"
+                    f"when running query_id={query_id}\nResponse:\n{self.res.text}"
                 )
             raise
 
@@ -111,26 +116,38 @@ class Redash:
                 f"endpoint: {self.endpoint} \napikey: {self.apikey}\n"
                 f"message: {result['message']}"
             )
-            raise ValueError(err_msg)
+            raise RuntimeError(err_msg)
 
         job = result["job"]
         job_status = job["status"]
 
         if job_status == JobStatus.CANCELLED:
-            raise ValueError(f"{job['error']}\nCurrently, parameters are {params}")
+            raise RuntimeError(f"{job['error']}\nCurrently, parameters are {params}")
 
         if job_status == JobStatus.FAILURE:
-            raise ValueError(
+            raise RuntimeError(
                 f"{job['error']}\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
             )
 
         while job_status in (JobStatus.PENDING, JobStatus.STARTED):
-            uri = f'{self.endpoint}/api/jobs/{job["id"]}?api_key={self.apikey}'
-            self.res = self.session.get(uri, timeout=timeout)
-            job = self.res.json()["job"]
-            job_status = job["status"]
-            print(".", end="", flush=True)
-            time.sleep(1)
+            try:
+                uri = f"{self.endpoint}/api/jobs/{job['id']}?api_key={self.apikey}"
+                self.res = self.client.get(uri, timeout=timeout)
+
+                if self.res.status_code == 502:
+                    logging.warning(f"Gateway error (502) occurred for job {job['id']}. Returning empty DataFrame.")
+                    return pd.DataFrame()
+
+                job = self.res.json()["job"]
+                job_status = job["status"]
+                logging.debug("Job status check in progress...")  # Progress indicator
+                time.sleep(1)
+            except httpx.TimeoutException:
+                logging.error(f"\nJob status check timed out after {timeout} seconds")
+                return pd.DataFrame()
+            except httpx.RequestError as e:
+                logging.error(f"\nError checking job status: {e}")
+                return pd.DataFrame()
 
         if job_status == JobStatus.FAILURE:
             err_msg = job["error"]
@@ -140,34 +157,38 @@ class Redash:
                 if "signal 9" in err_msg
                 else "\nPerhaps the query syntax is incorrect. Please correct it in `redash` and run it again."
             )
-            raise ValueError(f"{err_msg} {err_cxt} {url}")
+            raise RuntimeError(f"{err_msg} {err_cxt} {url}")
 
         if job_status == JobStatus.CANCELLED:
-            raise ValueError(f"{job['error']} Perhaps the query runtime error occurred.")
+            raise RuntimeError(f"{job['error']} Perhaps the query runtime error occurred.")
 
-        if "query_result_id" in job:
+        try:
             query_result_id = job["query_result_id"]
-            self.res = self.session.get(
+            self.res = self.client.get(
                 f"{self.endpoint}/api/query_results/{query_result_id}?api_key={self.apikey}",
                 timeout=timeout,
             )
+
             if self.res.status_code == 502:
-                print("A server error occurred. Please retry.")
-                return pd.DataFrame()  # Return empty DataFrame instead of None
+                logging.warning("Gateway error (502) occurred. Returning empty DataFrame.")
+                return pd.DataFrame()
+
             result = self.res.json()
-        elif "error" in job:
-            raise ValueError(f"{job['error']}")
-        else:
-            raise ValueError(f"`query_result` not found in `result` when running {query_id}. {result}")
+        except httpx.TimeoutException:
+            logging.error(f"\nRequest for query results timed out after {timeout} seconds")
+            return pd.DataFrame()
+        except httpx.RequestError as e:
+            logging.error(f"Error fetching query results: {e}")
+            return pd.DataFrame()
 
         try:
             # Convert response to a Pandas DataFrame
             data = result["query_result"]["data"]
             columns = [column["name"] for column in data["columns"]]
-            print(f"Successfully fetched {len(data['rows'])} rows from query_id = {query_id}.")
+            logging.info(f"Successfully fetched {len(data['rows'])} rows from query_id = {query_id}.")
             return pd.DataFrame(data["rows"], columns=columns)
         except Exception as e:
-            raise ValueError(f"Conversion of result to Pandas DataFrame failed. {e}")
+            raise RuntimeError(f"Conversion of result to Pandas DataFrame failed. {e}")
 
     def safe_query(
         self,
@@ -257,14 +278,14 @@ class Redash:
             "month",
             "year",
         ], "`interval` must be one of 'day', 'week', 'month', 'year'."
-        assert interval_multiple > 0 and isinstance(
-            interval_multiple, int
-        ), "`interval_multiple` must be an integer greater than 0."
+        assert interval_multiple > 0 and isinstance(interval_multiple, int), (
+            "`interval_multiple` must be an integer greater than 0."
+        )
 
         intervals = {"day": "D", "week": "W", "month": "MS", "year": "YS"}
-        interval = intervals[interval]
+        interval_code = intervals[interval]
 
-        start_dates = pd.date_range(start=start_date, end=end_date, freq=interval)
+        start_dates = pd.date_range(start=start_date, end=end_date, freq=interval_code)
         # create offset of interval_multiple
         start_dates = start_dates[::interval_multiple]
         end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
@@ -297,3 +318,8 @@ class Redash:
             uri += f"&p_{key}={value}"
 
         return uri
+
+    def __del__(self) -> None:
+        """Close the httpx client when the object is destroyed."""
+        if hasattr(self, "client"):
+            self.client.close()
