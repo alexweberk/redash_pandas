@@ -289,18 +289,28 @@ class Redash:
             "month",
             "quarter",
             "year",
-        ], "`interval` must be one of 'day', 'week', 'month', 'year'."
+        ], "`interval` must be one of 'day', 'week', 'month', 'quarter', 'year'."
         assert interval_multiple > 0 and isinstance(interval_multiple, int), (
             "`interval_multiple` must be an integer greater than 0."
         )
 
-        intervals = {"day": "D", "week": "W", "month": "MS", "year": "YS"}
+        intervals = {"day": "D", "week": "W", "month": "MS", "quarter": "QS", "year": "YS"}
         interval_code = intervals[interval]
 
         start_dates = pd.date_range(start=start_date, end=end_date, freq=interval_code)
         # create offset of interval_multiple
-        start_dates = start_dates[::interval_multiple]
-        end_dates = start_dates[1:].tolist() + [pd.to_datetime(end_date)]
+        user_input_start_date = pd.to_datetime(start_date)
+
+        if start_dates.empty:
+            print("The entered time range is too short, fetch the data as much as possible for you.")
+            start_dates = pd.DatetimeIndex([user_input_start_date])
+            end_dates = pd.DatetimeIndex([pd.to_datetime(end_date)])
+        elif start_dates[0] != user_input_start_date:
+            start_dates = pd.DatetimeIndex([user_input_start_date] + start_dates[::interval_multiple].tolist())
+            end_dates = pd.DatetimeIndex(start_dates[1:].tolist() + [pd.to_datetime(end_date)])
+        else:
+            start_dates = start_dates[::interval_multiple]
+            end_dates = pd.DatetimeIndex(start_dates[1:].tolist() + [pd.to_datetime(end_date)])
 
         dfs = []
         params = params or {}
