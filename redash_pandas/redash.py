@@ -221,6 +221,7 @@ class Redash:
         limit: int = 10000,
         max_iter: int = 100,
         timeout: int = 60,
+        query_timeout: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Queries Redash certain rows at a time.
@@ -231,6 +232,8 @@ class Redash:
             - params: Any parameters as a dictionary.
             - limit: Number of rows to fetch at a time.
             - max_iter: Max iterations. A safe guard to avoid an infinite loop.
+            - timeout: Timeout in seconds for the query request.
+            - query_timeout: Timeout in seconds for the query wait.
         Output:
             - dataframe: A dataframe of the fetched data.
         """
@@ -240,7 +243,13 @@ class Redash:
         for batch_ix in range(max_iter):
             start_ix = batch_ix * limit
             params.update({"offset_rows": start_ix, "limit_rows": limit})
-            partial_df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
+            partial_df = self.query(
+                query_id,
+                params=params,
+                max_age=max_age,
+                timeout=timeout,
+                query_timeout=query_timeout,
+            )
             if partial_df.empty:
                 break
             dfs.append(partial_df)
@@ -265,6 +274,7 @@ class Redash:
         interval_multiple: int = 1,
         max_age: int = 0,
         timeout: int = 60,
+        query_timeout: Optional[int] = None,
     ) -> pd.DataFrame:
         """Queries Redash at `query_id`, by only querying data within between
         start_date and end_date, with a frequency of `interval` x `interval_multiple`.
@@ -333,7 +343,13 @@ class Redash:
                     "end_date": end_date_.strftime("%Y-%m-%d"),
                 }
             )
-            df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
+            df = self.query(
+                query_id,
+                params=params,
+                max_age=max_age,
+                timeout=timeout,
+                query_timeout=query_timeout,
+            )
             if not df.empty:
                 dfs.append(df)
 
