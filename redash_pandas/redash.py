@@ -29,6 +29,7 @@ class Redash:
         apikey: str = "",
         endpoint: str = "",
         default_timeout: int = 60,  # 60 seconds
+        default_query_timeout: int = 60 * 5,  # 5 minutes
         logging_level: int = logging.INFO,
     ) -> None:
         """
@@ -47,6 +48,7 @@ class Redash:
             - endpoint: the endpoint of the Redash instance. For example: https://redash.your_url.com
             - default_timeout: default timeout in seconds for all requests
             - logging_level: logging level for this instance (default: logging.INFO)
+            - default_query_timeout: default timeout in seconds for query requests (default: 60 * 5 = 5 minutes)
         """
         # Setup instance-specific logger
         self.logger = logging.getLogger(f"{__name__}.Redash")
@@ -78,6 +80,7 @@ class Redash:
         self.res: Optional[httpx.Response] = None
         self.client = httpx.Client(timeout=default_timeout)  # Replace requests.Session
         self.default_timeout = default_timeout  # Store timeout for use in requests
+        self.default_query_timeout = default_query_timeout
 
     def query(
         self,
@@ -85,9 +88,11 @@ class Redash:
         params: Optional[dict] = None,
         max_age: int = 0,
         timeout: Optional[int] = None,
+        query_timeout: Optional[int] = None,
     ) -> pd.DataFrame:
         """Queries Redash at `query_id`"""
         timeout = timeout or self.default_timeout
+        query_timeout = query_timeout or self.default_query_timeout
         params = params or {}
         self.req = self._build_query_uri(query_id, params)
 
@@ -105,16 +110,16 @@ class Redash:
             )
             result = self.res.json()
         except httpx.TimeoutException:
-            self.logger.error(f"\nRequest timed out after {timeout} seconds for query_id={query_id}")
-            return pd.DataFrame()
+            self.logger.exception(f"\nRequest timed out after {timeout} seconds for query_id={query_id}")
+            raise
         except httpx.RequestError as e:
             if self.res is None:
-                self.logger.error(
+                self.logger.exception(
                     f"Maybe `endpoint` is not correct. "
                     f"Please check if it is accessible: `{self.endpoint}`\n\nResponse:\n{e}"
                 )
             else:
-                self.logger.error(
+                self.logger.exception(
                     f"Initial query request failed with status {self.res.status_code} "
                     f"when running query_id={query_id}\nResponse:\n{self.res.text}"
                 )
@@ -130,6 +135,7 @@ class Redash:
 
         job = result["job"]
         job_status = job["status"]
+        query_wait_start_time = time.time()
 
         if job_status == JobStatus.CANCELLED:
             raise RuntimeError(f"{job['error']}\nCurrently, parameters are {params}")
@@ -153,12 +159,18 @@ class Redash:
                 print(".", end="", flush=True)
                 self.logger.debug("Job status check in progress...")  # Progress indicator
                 time.sleep(1)
+
+                # Handle cases where the JobStatus does not update but the query is stale.
+                query_wait_time = time.time() - query_wait_start_time
+                if query_wait_time > query_timeout:
+                    raise RuntimeError(f"Query wait time exceeded {query_timeout} seconds")
+
             except httpx.TimeoutException:
-                self.logger.error(f"\nJob status check timed out after {timeout} seconds")
-                return pd.DataFrame()
+                self.logger.exception(f"\nJob status check timed out after {timeout} seconds")
+                raise
             except httpx.RequestError as e:
-                self.logger.error(f"\nError checking job status: {e}")
-                return pd.DataFrame()
+                self.logger.exception(f"\nError checking job status: {e}")
+                raise
 
         if job_status == JobStatus.FAILURE:
             err_msg = job["error"]
@@ -181,16 +193,16 @@ class Redash:
             )
 
             if self.res.status_code == 502:
-                self.logger.warning("Gateway error (502) occurred. Returning empty DataFrame.")
-                return pd.DataFrame()
+                self.logger.warning("Gateway error (502) occurred.")
+                raise RuntimeError("Gateway error (502) occurred.")
 
             result = self.res.json()
         except httpx.TimeoutException:
-            self.logger.error(f"\nRequest for query results timed out after {timeout} seconds")
-            return pd.DataFrame()
+            self.logger.exception(f"\nRequest for query results timed out after {timeout} seconds")
+            raise
         except httpx.RequestError as e:
-            self.logger.error(f"Error fetching query results: {e}")
-            return pd.DataFrame()
+            self.logger.exception(f"Error fetching query results: {e}")
+            raise
 
         try:
             # Convert response to a Pandas DataFrame
@@ -209,6 +221,7 @@ class Redash:
         limit: int = 10000,
         max_iter: int = 100,
         timeout: int = 60,
+        query_timeout: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Queries Redash certain rows at a time.
@@ -219,6 +232,8 @@ class Redash:
             - params: Any parameters as a dictionary.
             - limit: Number of rows to fetch at a time.
             - max_iter: Max iterations. A safe guard to avoid an infinite loop.
+            - timeout: Timeout in seconds for the query request.
+            - query_timeout: Timeout in seconds for the query wait.
         Output:
             - dataframe: A dataframe of the fetched data.
         """
@@ -228,7 +243,13 @@ class Redash:
         for batch_ix in range(max_iter):
             start_ix = batch_ix * limit
             params.update({"offset_rows": start_ix, "limit_rows": limit})
-            partial_df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
+            partial_df = self.query(
+                query_id,
+                params=params,
+                max_age=max_age,
+                timeout=timeout,
+                query_timeout=query_timeout,
+            )
             if partial_df.empty:
                 break
             dfs.append(partial_df)
@@ -253,6 +274,7 @@ class Redash:
         interval_multiple: int = 1,
         max_age: int = 0,
         timeout: int = 60,
+        query_timeout: Optional[int] = None,
     ) -> pd.DataFrame:
         """Queries Redash at `query_id`, by only querying data within between
         start_date and end_date, with a frequency of `interval` x `interval_multiple`.
@@ -290,9 +312,9 @@ class Redash:
             "quarter",
             "year",
         ], "`interval` must be one of 'day', 'week', 'month', 'quarter', 'year'."
-        assert interval_multiple > 0 and isinstance(interval_multiple, int), (
-            "`interval_multiple` must be an integer greater than 0."
-        )
+        assert interval_multiple > 0 and isinstance(
+            interval_multiple, int
+        ), "`interval_multiple` must be an integer greater than 0."
 
         intervals = {"day": "D", "week": "W", "month": "MS", "quarter": "QS", "year": "YS"}
         interval_code = intervals[interval]
@@ -321,7 +343,13 @@ class Redash:
                     "end_date": end_date_.strftime("%Y-%m-%d"),
                 }
             )
-            df = self.query(query_id, params=params, max_age=max_age, timeout=timeout)
+            df = self.query(
+                query_id,
+                params=params,
+                max_age=max_age,
+                timeout=timeout,
+                query_timeout=query_timeout,
+            )
             if not df.empty:
                 dfs.append(df)
 

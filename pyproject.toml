@@ -41,3 +41,8 @@ addopts = "-v --tb=short"
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
 ]
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=2.2.3.241126",
+]
