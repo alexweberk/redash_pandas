@@ -126,11 +126,7 @@ class Redash:
             raise
 
         if "message" in result:
-            err_msg = (
-                f"`endpoint` or `apikey` are not correct.\n"
-                f"endpoint: {self.endpoint} \napikey: {self.apikey}\n"
-                f"message: {result['message']}"
-            )
+            err_msg = f"Encountered an error when querying Redash.\nmessage: {result['message']}"
             raise RuntimeError(err_msg)
 
         job = result["job"]
@@ -145,10 +141,11 @@ class Redash:
                 f"{job['error']}\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
             )
 
+        job_status_uri = f"{self.endpoint}/api/jobs/{job['id']}?api_key={self.apikey}"
+
         while job_status in (JobStatus.PENDING, JobStatus.STARTED):
             try:
-                uri = f"{self.endpoint}/api/jobs/{job['id']}?api_key={self.apikey}"
-                self.res = self.client.get(uri, timeout=timeout)
+                self.res = self.client.get(job_status_uri, timeout=timeout)
 
                 if self.res.status_code == 502:
                     self.logger.warning(f"Gateway error (502) occurred for job {job['id']}. Returning empty DataFrame.")
@@ -312,9 +309,9 @@ class Redash:
             "quarter",
             "year",
         ], "`interval` must be one of 'day', 'week', 'month', 'quarter', 'year'."
-        assert interval_multiple > 0 and isinstance(
-            interval_multiple, int
-        ), "`interval_multiple` must be an integer greater than 0."
+        assert interval_multiple > 0 and isinstance(interval_multiple, int), (
+            "`interval_multiple` must be an integer greater than 0."
+        )
 
         intervals = {"day": "D", "week": "W", "month": "MS", "quarter": "QS", "year": "YS"}
         interval_code = intervals[interval]
