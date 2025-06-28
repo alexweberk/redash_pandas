@@ -10,3 +10,5 @@ build/
 redash_pandas.egg-info/
 
 tests/
+
+*.lock
