@@ -1,48 +1,94 @@
 [project]
 name = "redash-pandas"
-version = "0.1.1"
+version = "0.1.5"
 description = "A simple wrapper class for easy querying of data from Redash."
 authors = [{ name = "Alex Ishida", email = "alex.weber.k@gmail.com" }]
-dependencies = ["pandas>=2.2.3", "httpx>=0.28.1"]
 readme = "README.md"
-requires-python = ">= 3.10"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.rye]
-managed = true
-dev-dependencies = [
-    "pandas-stubs>=2.2.3.241126",
-    "types-requests>=2.32.0.20241016",
-    "pytest>=8.0.0",
-    "pytest-cov>=4.1.0",
-    "ipython>=8.31.0",
+requires-python = ">= 3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "pandas>=2.3.0",
 ]
 
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.build.targets.wheel]
-packages = ["redash_pandas"]
-
-[tool.black]
-line-length = 100
-
-[tool.ruff]
-exclude = [".venv"]
-line-length = 100
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-addopts = "-v --tb=short"
-markers = [
-    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
-]
+[tool.setuptools.packages.find]
+include = ["redash_pandas*"]
+exclude = ["credentials*", "tests*", "example.py"]
 
 [dependency-groups]
 dev = [
-    "pandas-stubs>=2.2.3.241126",
+    "mypy>=1.16.1",
+    "ruff>=0.12.1",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+indent-width = 4
+extend-include = ["*.ipynb"]
+
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203",    # 1 blank line required between docstring and code
+    "E402",    # module level import not at top of file
+    "ANN001",  # Missing type annotation for self in method
+    "D300",    # Use triple double quotes `"""`
+    "D415",    # First line should end with a period, question mark, or exclamation point
+    "D202",    # No blank lines allowed after function docstring
+    "RET504",  # Unnecessary assignment to `relevance_scores` before `return` statement
+    "T201",    # `print` found
+    "D205",    # 1 blank line required between summary line and description
+    "S101",    # Use of `assert` detected
+    "ERA001",  # Found commented-out code
+    "FBT001",  # Boolean-typed positional argument in function definition
+    "FBT002",  # Boolean-typed keyword argument in function call
+    "FBT003",  # Boolean positional value in function call
+    "D100",    # Missing docstring in public module
+    "N812",    # Lowercase imported as non lowercase
+    "D212",    # Multi-line docstring summary should start at the first line
+    "PD901",   # Avoid using the generic variable name `df` for DataFrames
+    "BLE001",  # Do not catch blind exception: `Exception`
+    "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed in `__getattr__`
+    "TRY003",  # Avoid specifying long messages outside the exception class
+    "ISC001",  # single-line-implicit-string-concatenation
+    "COM812",  # Missing trailing comma
+    "SIM105",  # Use `contextlib.suppress(ValueError)` instead of `try`-`except`-`pass`
+    "EM101",   # Exception must not use a string literal, assign to variable first
+    "PLR0913", # Too many arguments in function definition (6 > 5)
+    "D400",    # period not allowed in f-string
+    "D401",
+    "D107",
+    "D104",
+    "PLR0915", # Too many statements
+    "PLR0912", # Too many branches
+    "C901",    # Too complex
+    "RUF003",
+    "S108",
+    "SIM117",
+    "SLF001",
+    "NPY002",
+    "RUF001",
+    "RUF002",
+]
+unfixable = ["F401"]
+exclude = [".venv", "venv", "__pycache__", ".git", "dist", "tests"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.lint.pydocstyle]
+convention = "google"
+
+[tool.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.lint.pylint]
+max-args = 10
+disable = ["W0718", "E1101"]
+
+[tool.pylint]
+disable = ["W0718", "E1101"]
