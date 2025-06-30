@@ -12,7 +12,7 @@ df = redash.query(2600)
 
 # クエリをする際にパラメータが存在する時
 # {"パラメータ名": "代入する値"}
-params={"station1": "池袋", "station2": "新宿"}
+params = {"station1": "池袋", "station2": "新宿"}
 query_id = 200
 df = redash.query(query_id, params)
 
