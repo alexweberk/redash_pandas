@@ -1,8 +1,9 @@
 import json
 import logging
+import threading
 import time
 from enum import IntEnum
-from typing import Literal, Optional
+from itertools import cycle
 from pathlib import Path
 
 import httpx
@@ -17,6 +18,41 @@ class JobStatus(IntEnum):
     SUCCESS = 3
     FAILURE = 4
     CANCELLED = 5
+
+
+class ProgressIndicator:
+    """A progress indicator with spinner and elapsed time display."""
+
+    def __init__(self, sleep_interval: float = 0.1) -> None:
+        self.spinner_chars = cycle(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+        self.sleep_interval = sleep_interval
+        self.running = False
+        self.thread: threading.Thread | None = None
+        self.start_time: float | None = None
+
+    def start(self) -> None:
+        """Start the progress indicator."""
+        if self.running:
+            return
+        self.running = True
+        self.start_time = time.time()
+        self.thread = threading.Thread(target=self._animate, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        """Stop the progress indicator."""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.1)
+        print("\r" + " " * 50 + "\r", end="", flush=True)
+
+    def _animate(self) -> None:
+        """Animation loop running in a separate thread."""
+        while self.running:
+            elapsed = time.time() - self.start_time
+            spinner = next(self.spinner_chars)
+            print(f"\r{spinner} Processing... {elapsed:.1f}s", end="", flush=True)
+            time.sleep(self.sleep_interval)
 
 
 class Redash:
@@ -179,31 +215,12 @@ class Redash:
 
         job_status_uri = f"{self.endpoint}/api/jobs/{job['id']}?api_key={self.apikey}"
 
-        while job_status in (JobStatus.PENDING, JobStatus.STARTED):
-            try:
-                self.res = self.client.get(job_status_uri, timeout=timeout)
+        self.progress.start()
 
-                if self.res.status_code == 502:
-                    self.logger.warning(f"Gateway error (502) occurred for job {job['id']}. Returning empty DataFrame.")
-                    return pd.DataFrame()
-
-                job = self.res.json()["job"]
-                job_status = job["status"]
-                print(".", end="", flush=True)
-                self.logger.debug("Job status check in progress...")  # Progress indicator
-                time.sleep(1)
-
-                # Handle cases where the JobStatus does not update but the query is stale.
-                query_wait_time = time.time() - query_wait_start_time
-                if query_wait_time > query_timeout:
-                    raise RuntimeError(f"Query wait time exceeded {query_timeout} seconds")
-
-            except httpx.TimeoutException:
-                self.logger.exception(f"\nJob status check timed out after {timeout} seconds")
-                raise
-            except httpx.RequestError as e:
-                self.logger.exception(f"\nError checking job status: {e}")
-                raise
+        try:
+            self._wait_for_job_status(job_status_uri, job_status, query_wait_start_time, query_timeout)
+        finally:
+            self.progress.stop()
 
         if job_status == JobStatus.FAILURE:
             err_msg = job["error"]
