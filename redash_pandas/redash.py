@@ -3,15 +3,14 @@ import logging
 import time
 from enum import IntEnum
 from typing import Literal, Optional
+from pathlib import Path
 
 import httpx
 import pandas as pd
 
 
 class JobStatus(IntEnum):
-    """
-    see this: https://redash.io/help/user-guide/integrations-and-api/api
-    """
+    """See this: https://redash.io/help/user-guide/integrations-and-api/api."""
 
     PENDING = 1
     STARTED = 2
@@ -62,10 +61,10 @@ class Redash:
             self.logger.addHandler(handler)
 
         if credentials:
-            with open(credentials, "r", encoding="utf-8") as f:
+            with Path(credentials).open(encoding="utf-8") as f:
                 secrets: dict = json.load(f)
-            self.endpoint: Optional[str] = secrets.get("endpoint")
-            self.apikey: Optional[str] = secrets.get("apikey")
+            self.endpoint: str | None = secrets.get("endpoint")
+            self.apikey: str | None = secrets.get("apikey")
         else:
             self.apikey = apikey
             self.endpoint = endpoint
@@ -76,19 +75,55 @@ class Redash:
                 "Supply either `credentials` file path or the `apikey` and `endpoint` as a string."
             )
 
-        self.req: Optional[str] = None
-        self.res: Optional[httpx.Response] = None
+        self.progress = ProgressIndicator()
+        self.req: str | None = None
+        self.res: httpx.Response | None = None
         self.client = httpx.Client(timeout=default_timeout)  # Replace requests.Session
         self.default_timeout = default_timeout  # Store timeout for use in requests
         self.default_query_timeout = default_query_timeout
 
+    def _wait_for_job_status(
+        self, job_status_uri: str, job_status: JobStatus, query_wait_start_time: float, query_timeout: int
+    ) -> None:
+        """Waits for the job status to be updated."""
+        while job_status in (JobStatus.PENDING, JobStatus.STARTED):
+            try:
+                self.res = self.client.get(job_status_uri, timeout=self.default_timeout)
+
+                http_bad_gateway = 502
+                if self.res.status_code == http_bad_gateway:
+                    self.logger.warning(
+                        "Gateway error (502) occurred for job %s. Returning empty DataFrame.", job_status_uri
+                    )
+                    return
+
+                job = self.res.json()["job"]
+                job_status = job["status"]
+                self.logger.debug("Job status check in progress...")  # Progress indicator
+
+                # Handle cases where the JobStatus does not update but the query is stale.
+                query_wait_time = time.time() - query_wait_start_time
+                if query_wait_time > query_timeout:
+                    err_msg = f"Query wait time exceeded {query_timeout} seconds"
+                    raise RuntimeError(err_msg)
+
+                # Wait 1 second before next check
+                time.sleep(1)
+
+            except httpx.TimeoutException:
+                self.logger.exception("Job status check timed out after %s seconds", self.default_timeout)
+                raise
+            except httpx.RequestError:
+                self.logger.exception("Error checking job status")
+                raise
+
     def query(
         self,
         query_id: int | str,
-        params: Optional[dict] = None,
+        params: dict | None = None,
         max_age: int = 0,
-        timeout: Optional[int] = None,
-        query_timeout: Optional[int] = None,
+        timeout: int | None = None,
+        query_timeout: int | None = None,
     ) -> pd.DataFrame:
         """Queries Redash at `query_id`"""
         timeout = timeout or self.default_timeout
@@ -110,18 +145,19 @@ class Redash:
             )
             result = self.res.json()
         except httpx.TimeoutException:
-            self.logger.exception(f"\nRequest timed out after {timeout} seconds for query_id={query_id}")
+            self.logger.exception("Request timed out after %s seconds for query_id=%s", timeout, query_id)
             raise
-        except httpx.RequestError as e:
+        except httpx.RequestError:
             if self.res is None:
                 self.logger.exception(
-                    f"Maybe `endpoint` is not correct. "
-                    f"Please check if it is accessible: `{self.endpoint}`\n\nResponse:\n{e}"
+                    "Maybe `endpoint` is not correct. Please check if it is accessible: `%s`", self.endpoint
                 )
             else:
                 self.logger.exception(
-                    f"Initial query request failed with status {self.res.status_code} "
-                    f"when running query_id={query_id}\nResponse:\n{self.res.text}"
+                    "Initial query request failed with status %s when running query_id=%s\nResponse:\n%s",
+                    self.res.status_code,
+                    query_id,
+                    self.res.text,
                 )
             raise
 
@@ -134,12 +170,12 @@ class Redash:
         query_wait_start_time = time.time()
 
         if job_status == JobStatus.CANCELLED:
-            raise RuntimeError(f"{job['error']}\nCurrently, parameters are {params}")
+            err_msg = f"{job['error']}\nCurrently, parameters are {params}"
+            raise RuntimeError(err_msg)
 
         if job_status == JobStatus.FAILURE:
-            raise RuntimeError(
-                f"{job['error']}\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
-            )
+            err_msg = f"{job['error']}\nMaybe, parameter value missing for query, or query timed out. \n\t{self.req}"
+            raise RuntimeError(err_msg)
 
         job_status_uri = f"{self.endpoint}/api/jobs/{job['id']}?api_key={self.apikey}"
 
@@ -177,10 +213,12 @@ class Redash:
                 if "signal 9" in err_msg
                 else "\nPerhaps the query syntax is incorrect. Please correct it in `redash` and run it again."
             )
-            raise RuntimeError(f"{err_msg} {err_cxt} {url}")
+            full_err_msg = f"{err_msg} {err_cxt} {url}"
+            raise RuntimeError(full_err_msg)
 
         if job_status == JobStatus.CANCELLED:
-            raise RuntimeError(f"{job['error']} Perhaps the query runtime error occurred.")
+            err_msg = f"{job['error']} Perhaps the query runtime error occurred."
+            raise RuntimeError(err_msg)
 
         try:
             query_result_id = job["query_result_id"]
@@ -189,36 +227,38 @@ class Redash:
                 timeout=timeout,
             )
 
-            if self.res.status_code == 502:
+            http_bad_gateway = 502
+            if self.res.status_code == http_bad_gateway:
                 self.logger.warning("Gateway error (502) occurred.")
                 raise RuntimeError("Gateway error (502) occurred.")
 
             result = self.res.json()
         except httpx.TimeoutException:
-            self.logger.exception(f"\nRequest for query results timed out after {timeout} seconds")
+            self.logger.exception("Request for query results timed out after %s seconds", timeout)
             raise
-        except httpx.RequestError as e:
-            self.logger.exception(f"Error fetching query results: {e}")
+        except httpx.RequestError:
+            self.logger.exception("Error fetching query results")
             raise
 
         try:
             # Convert response to a Pandas DataFrame
             data = result["query_result"]["data"]
             columns = [column["name"] for column in data["columns"]]
-            self.logger.info(f"Successfully fetched {len(data['rows'])} rows from query_id = {query_id}.")
+            self.logger.info("Successfully fetched %s rows from query_id = %s.", len(data["rows"]), query_id)
             return pd.DataFrame(data["rows"], columns=columns)
         except Exception as e:
-            raise RuntimeError(f"Conversion of result to Pandas DataFrame failed. {e}")
+            err_msg = f"Conversion of result to Pandas DataFrame failed. {e}"
+            raise RuntimeError(err_msg) from e
 
     def safe_query(
         self,
         query_id: int,
-        params: Optional[dict] = None,
+        params: dict | None = None,
         max_age: int = 0,
         limit: int = 10000,
         max_iter: int = 100,
         timeout: int = 60,
-        query_timeout: Optional[int] = None,
+        query_timeout: int | None = None,
     ) -> pd.DataFrame:
         """
         Queries Redash certain rows at a time.
@@ -266,14 +306,15 @@ class Redash:
         query_id: int,
         start_date: str,  # like '2024-01-01'
         end_date: str,  # like '2024-01-31'
-        interval: Literal["day", "week", "month", "quarter", "year"],
-        params: Optional[dict] = None,
+        interval: str,
+        params: dict | None = None,
         interval_multiple: int = 1,
         max_age: int = 0,
         timeout: int = 60,
-        query_timeout: Optional[int] = None,
+        query_timeout: int | None = None,
     ) -> pd.DataFrame:
-        """Queries Redash at `query_id`, by only querying data within between
+        """
+        Queries Redash at `query_id`, by only querying data within between
         start_date and end_date, with a frequency of `interval` x `interval_multiple`.
         For example, `interval = 'month'` and `interval_multiple = 3` will query data for every 3 months.
         This can help make the query run much faster.
@@ -299,24 +340,19 @@ class Redash:
         %run redash_pandas/redash.py
         redash = Redash(**json.loads(open("<<credentials_file>>").read()))
         df = redash.period_limited_query(6738, start_date='2023-01-01', end_date='2024-06-20',
-            interval='month', interval_multiple = 3)
+            interval='month', interval_multiple = 3)  # or interval=Interval.month
+
         """
-        assert start_date and end_date and interval, "`start_date`, `end_date` and `interval` must be defined."
-        assert interval in [
-            "day",
-            "week",
-            "month",
-            "quarter",
-            "year",
-        ], "`interval` must be one of 'day', 'week', 'month', 'quarter', 'year'."
-        assert interval_multiple > 0 and isinstance(interval_multiple, int), (
-            "`interval_multiple` must be an integer greater than 0."
-        )
+        assert start_date, "`start_date` must be defined."
+        assert end_date, "`end_date` must be defined."
+        assert interval, "`interval` must be defined."
+        assert interval_multiple > 0, "`interval_multiple` must be greater than 0."
+        assert isinstance(interval_multiple, int), "`interval_multiple` must be an integer."
 
-        intervals = {"day": "D", "week": "W", "month": "MS", "quarter": "QS", "year": "YS"}
-        interval_code = intervals[interval]
+        if interval not in ("day", "week", "month", "quarter", "year"):
+            raise ValueError("`interval` must be one of 'day', 'week', 'month', 'quarter', 'year'.")
 
-        start_dates = pd.date_range(start=start_date, end=end_date, freq=interval_code)
+        start_dates = pd.date_range(start=start_date, end=end_date, freq=interval.freq_code)
         # create offset of interval_multiple
         user_input_start_date = pd.to_datetime(start_date)
 
@@ -325,15 +361,15 @@ class Redash:
             start_dates = pd.DatetimeIndex([user_input_start_date])
             end_dates = pd.DatetimeIndex([pd.to_datetime(end_date)])
         elif start_dates[0] != user_input_start_date:
-            start_dates = pd.DatetimeIndex([user_input_start_date] + start_dates[::interval_multiple].tolist())
-            end_dates = pd.DatetimeIndex(start_dates[1:].tolist() + [pd.to_datetime(end_date)])
+            start_dates = pd.DatetimeIndex([user_input_start_date, *start_dates[::interval_multiple].tolist()])
+            end_dates = pd.DatetimeIndex([*start_dates[1:].tolist(), pd.to_datetime(end_date)])
         else:
             start_dates = start_dates[::interval_multiple]
-            end_dates = pd.DatetimeIndex(start_dates[1:].tolist() + [pd.to_datetime(end_date)])
+            end_dates = pd.DatetimeIndex([*start_dates[1:].tolist(), pd.to_datetime(end_date)])
 
         dfs = []
         params = params or {}
-        for start_date_, end_date_ in zip(start_dates, end_dates):
+        for start_date_, end_date_ in zip(start_dates, end_dates, strict=False):
             params.update(
                 {
                     "start_date": start_date_.strftime("%Y-%m-%d"),
@@ -356,7 +392,7 @@ class Redash:
         final_df = pd.concat(dfs, axis=0, ignore_index=True)
         return final_df
 
-    def _build_query_uri(self, query_id: int | str, params: Optional[dict] = None) -> str:
+    def _build_query_uri(self, query_id: int | str, params: dict | None = None) -> str:
         """Builds query request URI."""
         params = params or {}
         uri = f"{self.endpoint}/api/queries/{query_id}/results?api_key={self.apikey}"
