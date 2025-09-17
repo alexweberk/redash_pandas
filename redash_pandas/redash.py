@@ -409,7 +409,7 @@ class Redash:
         final_df = pd.concat(dfs, axis=0, ignore_index=True)
         return final_df
 
-    def _build_query_uri(self, query_id: int | str, params: dict | None = None) -> str:
+    def _build_query_uri(self, query_id: int | str) -> str:
         """Builds query request URI."""
         uri = f"{self.endpoint}/api/queries/{query_id}/results?api_key={self.apikey}"
         return uri
