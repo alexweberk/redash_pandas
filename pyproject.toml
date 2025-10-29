@@ -16,8 +16,8 @@ exclude = ["credentials*", "tests*", "example.py"]
 
 [dependency-groups]
 dev = [
-    "mypy>=1.16.1",
-    "ruff>=0.12.1",
+    "mypy>=1.18.2",
+    "ruff>=0.14.1",
 ]
 
 [tool.ruff]
@@ -47,7 +47,6 @@ ignore = [
     "D100",    # Missing docstring in public module
     "N812",    # Lowercase imported as non lowercase
     "D212",    # Multi-line docstring summary should start at the first line
-    "PD901",   # Avoid using the generic variable name `df` for DataFrames
     "BLE001",  # Do not catch blind exception: `Exception`
     "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed in `__getattr__`
     "TRY003",  # Avoid specifying long messages outside the exception class
